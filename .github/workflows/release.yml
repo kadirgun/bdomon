@@ -1,7 +1,7 @@
 name: Release Build
 
-# Tetikleme: v* etiketleri (örn. v0.1.0) push edildiğinde GitHub Release
-# oluşturur; manuel çalıştırmada (workflow_dispatch) sadece artifact yükler.
+# Triggered by pushing v* tags (e.g. v0.1.0), which creates a GitHub Release;
+# manual runs (workflow_dispatch) only upload a build artifact.
 on:
   workflow_dispatch:
   push:
@@ -18,18 +18,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: pnpm kurulumu
+      - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - name: Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
 
-      - name: Rust toolchain
+      - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -39,29 +39,29 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # NOT: repoda pnpm-lock.yaml yoksa sürümler kayabilir; ilk build sonrası
-      # üretilen lock dosyasını repoya commit etmek build'i tekrarlanabilir yapar.
-      - name: Frontend bağımlılıkları
+      # NOTE: without a committed pnpm-lock.yaml, dependency versions may drift;
+      # commit the lock file after the first build to keep builds reproducible.
+      - name: Install frontend dependencies
         run: pnpm install
 
-      # beforeBuildCommand (pnpm build) otomatik çalışır; hud.png ve font
-      # include_bytes! ile exe'ye gömülür (src-tauri/resources/ repoda olmalı).
-      # --no-bundle: MSI/NSIS üretimi atlanır, yalnızca portable exe kalır.
+      # beforeBuildCommand (pnpm build) runs automatically; hud.png and the font
+      # are embedded into the exe via include_bytes! (src-tauri/resources/ must
+      # be committed). --no-bundle skips MSI/NSIS, leaving only the portable exe.
       - name: Tauri release build
         run: pnpm tauri build --no-bundle
 
-      - name: Build çıktıları
+      - name: List build output
         shell: bash
         run: ls -la src-tauri/target/release/*.exe
 
-      - name: Artifact yükle (her çalıştırmada)
+      - name: Upload artifact (every run)
         uses: actions/upload-artifact@v4
         with:
           name: bdomon-windows
           if-no-files-found: error
           path: src-tauri/target/release/bdomon.exe
 
-      - name: GitHub Release oluştur (yalnızca v* etiketlerinde)
+      - name: Create GitHub Release (v* tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
