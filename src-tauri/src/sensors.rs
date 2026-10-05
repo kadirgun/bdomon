@@ -3,9 +3,10 @@
 //! - CPU: `GetSystemTimes` deltalarından toplam kullanım (%). SDK örneğinin
 //!   `CalcCpuUsage` yöntemiyle aynı yaklaşım.
 //! - GPU: PDH "GPU Engine(*)\\Utilization Percentage" sayaçları — Task
-//!   Manager'ın kullandığı kaynak; motorların toplamı (0-100'e kırpılır).
-//!   RTSS bu veriyi kendi HAL'inde tutar ama paylaşımlı bellekten vermez,
-//!   bu yüzden aynı veriyi doğrudan Windows'tan okuyoruz.
+//!   Manager'ın kullandığı kaynak. Örnekler dinamiktir, her örneklemede
+//!   yenilenir; bildirilen değer 3D motorunun toplamı (Task Manager'ın
+//!   varsayılanı). RTSS bu veriyi kendi HAL'inde tutar ama paylaşımlı
+//!   bellekten vermez, bu yüzden aynı veriyi doğrudan Windows'tan okuyoruz.
 //! - FPS: RTSS paylaşımlı belleğindeki uygulama girişinden (bu modülde
 //!   değil — `RtssClient::list_apps()` ile okunur).
 
@@ -19,8 +20,8 @@ use windows::Win32::NetworkManagement::IpHelper::{
 };
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhExpandWildCardPathW,
-    PdhGetFormattedCounterValue, PdhOpenQueryW, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
-    PDH_HCOUNTER, PDH_HQUERY,
+    PdhGetFormattedCounterValue, PdhOpenQueryW, PdhRemoveCounter, PDH_FMT_COUNTERVALUE,
+    PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY,
 };
 use windows::Win32::System::Threading::GetSystemTimes;
 
@@ -63,9 +64,17 @@ fn read_times() -> (u64, u64) {
 }
 
 /// GPU motor kullanımı (%) — PDH sayaçlarından.
+///
+/// "GPU Engine(*)\Utilization Percentage" örnekleri DİNAMİKTİR: süreçler GPU
+/// kullanmaya başladığında/bıraktığında belirir ve kaybolur. Sayaçları bir kez
+/// oluşturup sabitlemek oyunun örneklerini kaçırdığı için (Task Manager %76
+/// iken hud'da %3 kalması tam olarak buydu) örnek listesi her örneklemede
+/// yeniden açılır. Bildirilen değer: tüm süreçlerin 3D motoru toplamı —
+/// Task Manager'ın varsayılan metrikleri; 3D örneği yoksa tüm motorların toplamı.
 pub struct GpuMonitor {
     query: PDH_HQUERY,
-    counters: Vec<PDH_HCOUNTER>,
+    /// Normalize edilmiş sayaç yolu → tanıtıcı (örnek kümesi zamanla değişir).
+    counters: std::collections::HashMap<String, PDH_HCOUNTER>,
 }
 
 impl GpuMonitor {
@@ -75,10 +84,28 @@ impl GpuMonitor {
             if PdhOpenQueryW(None, 0, &mut query) != 0 {
                 return None;
             }
+            let mut monitor = Self {
+                query,
+                counters: std::collections::HashMap::new(),
+            };
+            if !monitor.refresh_instances() || monitor.counters.is_empty() {
+                PdhCloseQuery(query);
+                return None;
+            }
 
-            // Joker yolu gerçek örneklere aç (örn. "..._engtype_3D").
-            // Yüzlerce örnek olabilir — gerekli tamponu PDH_MORE_DATA ile öğren.
-            const PDH_MORE_DATA: u32 = 0x8000_07D2;
+            // Sayaç eklendikten sonra ilk koleksiyon yapıyı kurar;
+            // ikincisi gerçek veri üretir.
+            PdhCollectQueryData(query);
+            Some(monitor)
+        }
+    }
+
+    /// Joker yolu yeniden açar; yeni motor örnekleri ekler, ölmüş olanları
+    /// çıkarır. Genişletme başarısızsa mevcut sayaçlarla devam edilir (false).
+    fn refresh_instances(&mut self) -> bool {
+        // Yüzlerce örnek olabilir — gerekli tamponu PDH_MORE_DATA ile öğren.
+        const PDH_MORE_DATA: u32 = 0x8000_07D2;
+        unsafe {
             let path = wide("\\GPU Engine(*)\\Utilization Percentage");
             let mut buf = Vec::new();
             let mut len: u32 = 0;
@@ -101,63 +128,85 @@ impl GpuMonitor {
             }
             if status != 0 {
                 eprintln!("[gpu] expand durum=0x{status:08X}");
-                PdhCloseQuery(query);
-                return None;
+                return false;
             }
             buf.truncate(len as usize);
 
-            let mut counters = Vec::new();
+            let mut seen = std::collections::HashSet::new();
             for p in split_nul_strings(&buf) {
                 // PdhExpandWildCardPathW yerel makine adı öneki ekler
                 // ("\\KADIR\GPU Engine..."); yerel yollar öneksiz eklenir.
                 let s = String::from_utf16_lossy(&p);
                 let s = match s.find("GPU Engine") {
-                    Some(i) if i > 0 => &s[i - 1..],
-                    _ => &s[..],
+                    Some(i) if i > 0 => s[i - 1..].to_string(),
+                    _ => s,
                 };
+                if !seen.insert(s.clone()) || self.counters.contains_key(&s) {
+                    continue;
+                }
                 let w = wide(&s);
                 let mut h = PDH_HCOUNTER::default();
-                if PdhAddEnglishCounterW(query, PCWSTR(w.as_ptr()), 0, &mut h) == 0 {
-                    counters.push(h);
+                if PdhAddEnglishCounterW(self.query, PCWSTR(w.as_ptr()), 0, &mut h) == 0 {
+                    self.counters.insert(s, h);
                 }
             }
-            if counters.is_empty() {
-                PdhCloseQuery(query);
-                return None;
+            // Artık var olmayan örneklerin sayaçlarını çıkar.
+            let stale: Vec<String> = self
+                .counters
+                .keys()
+                .filter(|k| !seen.contains(*k))
+                .cloned()
+                .collect();
+            for k in stale {
+                if let Some(h) = self.counters.remove(&k) {
+                    PdhRemoveCounter(h);
+                }
             }
-            if counters.is_empty() {
-                PdhCloseQuery(query);
-                return None;
-            }
-
-            // Sayaç eklendikten sonra ilk koleksiyon yapıyı kurar;
-            // ikincisi gerçek veri üretir.
-            PdhCollectQueryData(query);
-
-            Some(Self { query, counters })
+            true
         }
     }
 
     /// GPU kullanımı (%). Hata durumunda None (son değer korunur).
     pub fn sample(&mut self) -> Option<f64> {
         unsafe {
+            // Örnekler süreç etkinliğiyle gelip gider; her seferinde yenile.
+            self.refresh_instances();
+
             let cs = PdhCollectQueryData(self.query);
             if cs != 0 {
                 eprintln!("[gpu] collect durum=0x{cs:08X}");
                 return None;
             }
-            let mut sum = 0.0;
-            for &h in &self.counters {
+
+            // 3D motoru toplamı (Task Manager'ın varsayılanı); 3D örneği
+            // yoksa tüm motorlar. Yeni eklenen sayaçların ilk örneklemede
+            // CStatus'ı geçersizdir (ikinci koleksiyona kadar) — atlanır.
+            let mut sum_3d = 0.0;
+            let mut sum_all = 0.0;
+            let mut n_3d = 0;
+            for (path, &h) in &self.counters {
                 let mut v = PDH_FMT_COUNTERVALUE::default();
                 if PdhGetFormattedCounterValue(h, PDH_FMT_DOUBLE, None, &mut v) == 0
                     && v.CStatus == 0
                 {
-                    sum += v.Anonymous.doubleValue;
+                    let val = v.Anonymous.doubleValue;
+                    sum_all += val;
+                    if is_3d_engine(path) {
+                        sum_3d += val;
+                        n_3d += 1;
+                    }
                 }
             }
-            Some(sum.clamp(0.0, 100.0))
+            let value = if n_3d > 0 { sum_3d } else { sum_all };
+            Some(value.clamp(0.0, 100.0))
         }
     }
+}
+
+/// Örnek adı 3D motoru gösteriyor mu? Win10+ örnek adları:
+/// `pid_N_luid_..._phys_N_engtype_3D` (yeni) veya `..._eng_0` (eski).
+fn is_3d_engine(path: &str) -> bool {
+    path.contains("engtype_3D") || path.contains("eng_0)")
 }
 
 impl Drop for GpuMonitor {
