@@ -1,0 +1,156 @@
+:root {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #16181d;
+  color: #e8e8e8;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+}
+
+.panel {
+  max-width: 512px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 2px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #b8bcc4;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555;
+  flex: none;
+}
+
+.dot.on {
+  background: #3ddc84;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #23262e;
+  color: #e8e8e8;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #2c303a;
+}
+
+button.small {
+  flex: none;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+/* 16:9 ekran önizlemesi */
+.preview {
+  position: relative;
+  width: 480px;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px) 0 0 / 100% 6.25%,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px) 0 0 / 6.25% 100%,
+    #0a0c10;
+  border: 1px solid #2a2f38;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* Sürüklenebilir HUD elemanı (ölçekli mini panel) */
+.hudEl {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid #b3996c;
+  border-radius: 3px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.hudEl.drag {
+  cursor: grabbing;
+  border-color: #ffd479;
+}
+
+.mdot {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+}
+
+.mdot.g { background: #2fae4f; }
+.mdot.b { background: #2f7fd0; }
+.mdot.p { background: #8a5fd0; }
+.mdot.y { background: #d0b03f; }
+
+.hint {
+  font-size: 11px;
+  color: #7b8290;
+  margin-top: -8px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #b8bcc4;
+}
+
+input {
+  padding: 6px 8px;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #101216;
+  color: #e8e8e8;
+  font-size: 13px;
+}
+
+.live {
+  font-size: 13px;
+  color: #9aa0aa;
+}
+
+.msg {
+  font-size: 12px;
+  color: #6fbf73;
+  min-height: 16px;
+  word-break: break-word;
+}
